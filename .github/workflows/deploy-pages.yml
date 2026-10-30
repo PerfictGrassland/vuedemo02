@@ -1,0 +1,132 @@
+# ==============================================================================
+# Workflow 名称：会显示在 GitHub 仓库的 Actions 标签页左侧列表中
+# ==============================================================================
+name: Vue CI Build & Deploy - GitHubPages
+
+# ==============================================================================
+# 触发条件（Trigger）：定义什么情况下会启动这个流水线
+# ==============================================================================
+on:
+  # 当有代码推送到 main 分支时触发
+  push:
+    branches: [main]
+  # 当有针对 main 分支的 Pull Request（合并请求）时也会触发
+  pull_request:
+    branches: [main]
+
+# ==============================================================================
+# 任务集合（Jobs）：流水线中包含的所有具体任务
+# ==============================================================================
+jobs:
+  # ----------------------------------------------------------------------------
+  # 任务 1：构建（Build）
+  # 职责：拉取代码 -> 安装环境 -> 安装依赖 -> 执行打包 -> 保存产物
+  # ----------------------------------------------------------------------------
+  build-job:
+    # 指定运行环境：使用 GitHub 提供的最新版 Ubuntu 虚拟机
+    runs-on: ubuntu-latest
+
+    # 具体的执行步骤，按顺序自上而下执行
+    steps:
+      - name: 检出代码
+        # 使用官方 Action 将仓库的代码拉取到虚拟机的工作目录中
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        # 使用官方 Action 安装指定的 Node.js 版本
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          # 开启缓存，通过 package-lock.json 缓存 npm 依赖，加快后续构建速度
+          cache: 'npm'
+
+      - name: 安装依赖
+        # 在 CI 环境中，推荐使用 npm ci 而不是 npm install
+        # npm ci 会严格按照 package-lock.json 安装，保证环境一致性，速度也更快
+        run: npm ci
+
+      - name: Vue打包
+        # 执行项目里定义的打包脚本，通常会在根目录生成 dist 文件夹
+        run: npm run build
+
+      - name: 保存dist产物
+        # 关键步骤：把打包好的 dist 目录作为“工件（Artifact）”上传到 GitHub 云端
+        # 因为不同的 Job 运行在不同的独立虚拟机上，必须通过 Artifact 传递文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-files # 产物的名字，供后续下载时使用
+          path: dist/ # 要上传的目录路径
+
+  # ----------------------------------------------------------------------------
+  # 任务 2：单元测试 1（Test 1）
+  # 职责：等待构建完成后，执行测试（这里用 echo 模拟）
+  # ----------------------------------------------------------------------------
+  test-job1:
+    # needs 定义依赖关系：必须等 build-job 成功跑完，才会执行当前任务
+    needs: build-job
+    runs-on: ubuntu-latest
+    steps:
+      - name: 执行单元测试1
+        run: echo "单元测试1执行完成 ✅"
+
+  # ----------------------------------------------------------------------------
+  # 任务 3：单元测试 2（Test 2）
+  # 职责：与 test-job1 并行执行，模拟耗时较长的测试
+  # ----------------------------------------------------------------------------
+  test-job2:
+    # 同样依赖 build-job，但它和 test-job1 之间没有依赖，所以会并行执行
+    needs: build-job
+    runs-on: ubuntu-latest
+    steps:
+      - name: 执行单元测试2
+        run: echo "单元测试2执行开始 ⏳"
+
+      - name: 模拟耗时测试
+        # 暂停 10 秒，模拟真实测试过程中的等待时间
+        run: sleep 10
+
+      - name: 测试结束
+        run: echo "单元测试2执行完成 ✅"
+
+  # ----------------------------------------------------------------------------
+  # 任务 4：部署到生产环境（Deploy）
+  # 职责：等待所有测试通过后，将打包产物发布到 GitHub Pages
+  # ----------------------------------------------------------------------------
+  deploy-prod:
+    # 必须等 test-job1 和 test-job2 全部成功，才会执行部署
+    needs: [test-job1, test-job2]
+
+    # 安全控制（极其重要）：
+    # 只有触发方式为 'push' 且目标分支是 'refs/heads/main' 时才执行。
+    # 这意味着，如果是别人提的 PR，构建和测试会跑，但绝对不会触发部署。
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 下载打包产物dist
+        # 从云端下载之前 build-job 上传的 dist-files 工件，并解压到 dist/ 目录
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-files
+          path: dist/
+
+      - name: 查看准备部署的文件列表
+        # 用 Shell 脚本打印环境变量和文件列表，方便在日志里排查问题
+        run: |
+          echo "===== 准备发布到 GitHub Pages ====="
+          echo "当前分支: $GITHUB_REF_NAME"  # GitHub 内置环境变量，表示当前分支名
+          echo "commit SHA: $GITHUB_SHA"    # GitHub 内置环境变量，表示当前提交的哈希值
+          echo "dist目录文件列表："
+          ls -la dist                      # 查看 dist 目录下有哪些文件
+          echo "==================================="
+
+      - name: 部署到GitHub Pages
+        # 使用第三方 Action：peaceiris/actions-gh-pages
+        # 这个 Action 会自动创建一个名为 gh-pages 的分支，并把 publish_dir 里的文件推送到那个分支
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          # 使用 GitHub 自动注入的临时令牌，获得向仓库推送代码的权限
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # 指定要发布的目录
+          publish_dir: ./dist
