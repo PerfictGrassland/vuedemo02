@@ -8,7 +8,8 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 // https://vite.dev/config/
 export default defineConfig({
   // base: '/vuedemo02/', // git action pages使用到
-  base: './', // Jenkins配置
+  base: '/vuedemo03/',
+  // base: './', // Jenkins配置
   plugins: [vue(), vueJsx(), vueDevTools()],
   resolve: {
     alias: {
